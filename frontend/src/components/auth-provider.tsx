@@ -6,6 +6,11 @@ import type { User, Session } from '@supabase/supabase-js';
 
 export type UserRole = 'admin' | 'member' | null;
 
+// ─── Danh sách email admin cứng (fallback khi RLS block profiles) ───
+const ADMIN_EMAILS = [
+    'dinhcongdu107@gmail.com',
+];
+
 interface Profile {
     id: string;
     email: string;
@@ -38,57 +43,95 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [profile, setProfile] = useState<Profile | null>(null);
     const [loading, setLoading] = useState(true);
 
-    const fetchProfile = useCallback(async (userId: string) => {
+    const fetchProfile = useCallback(async (userId: string, userEmail?: string) => {
         try {
             const { data, error } = await supabase
                 .from('profiles')
                 .select('*')
                 .eq('id', userId)
                 .maybeSingle();
+
             if (!error && data) {
                 setProfile(data as Profile);
             } else {
-                setProfile(null);
+                // RLS blocked — dùng email fallback để isAdmin vẫn hoạt động
+                console.warn('Profile fetch blocked (RLS?), using email fallback:', error?.message);
+                if (userEmail) {
+                    const isAdminEmail = ADMIN_EMAILS.includes(userEmail.toLowerCase());
+                    const role: UserRole = isAdminEmail ? 'admin' : 'member';
+                    setProfile({
+                        id: userId,
+                        email: userEmail,
+                        display_name: userEmail.split('@')[0],
+                        role,
+                        person_handle: null,
+                        avatar_url: null,
+                    });
+                } else {
+                    setProfile(null);
+                }
             }
         } catch {
-            setProfile(null);
+            if (userEmail) {
+                const isAdminEmail = ADMIN_EMAILS.includes(userEmail.toLowerCase());
+                const role: UserRole = isAdminEmail ? 'admin' : 'member';
+                setProfile({
+                    id: userId,
+                    email: userEmail,
+                    display_name: userEmail.split('@')[0],
+                    role,
+                    person_handle: null,
+                    avatar_url: null,
+                });
+            } else {
+                setProfile(null);
+            }
         }
     }, []);
 
     const ensureProfile = useCallback(async (u: User) => {
-        // Create profile if it doesn't exist (handles signup)
-        const { data: existing } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('id', u.id)
-            .maybeSingle();
+        try {
+            const { data: existing } = await supabase
+                .from('profiles')
+                .select('id')
+                .eq('id', u.id)
+                .maybeSingle();
 
-        if (!existing) {
-            await supabase.from('profiles').insert({
-                id: u.id,
-                email: u.email || '',
-                display_name: u.user_metadata?.display_name || u.email?.split('@')[0] || '',
-                role: 'member',
-            });
+            if (!existing) {
+                const isAdminEmail = ADMIN_EMAILS.includes((u.email || '').toLowerCase());
+                const role: UserRole = isAdminEmail ? 'admin' : 'member';
+                await supabase.from('profiles').insert({
+                    id: u.id,
+                    email: u.email || '',
+                    display_name: u.user_metadata?.display_name || u.email?.split('@')[0] || '',
+                    role,
+                });
+            }
+        } catch {
+            // RLS may block — ignore and continue to fetchProfile
         }
-        await fetchProfile(u.id);
+        await fetchProfile(u.id, u.email);
     }, [fetchProfile]);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session: s } }) => {
             setSession(s);
             setUser(s?.user ?? null);
-            if (s?.user) ensureProfile(s.user);
-            setLoading(false);
+            if (s?.user) {
+                ensureProfile(s.user).then(() => setLoading(false));
+            } else {
+                setLoading(false);
+            }
         });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
             setSession(s);
             setUser(s?.user ?? null);
             if (s?.user) {
-                ensureProfile(s.user);
+                ensureProfile(s.user).then(() => setLoading(false));
             } else {
                 setProfile(null);
+                setLoading(false);
             }
         });
 
@@ -120,7 +163,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
             return { error: error.message };
         }
-        // If email confirmation is required
         if (data.user && !data.session) {
             return { error: 'Đã đăng ký! Kiểm tra email để xác nhận tài khoản.' };
         }
@@ -133,10 +175,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const refreshProfile = useCallback(async () => {
-        if (user) await fetchProfile(user.id);
+        if (user) await fetchProfile(user.id, user.email);
     }, [user, fetchProfile]);
 
-    const role = profile?.role ?? null;
+    // isAdmin: ưu tiên profile DB, fallback sang email list
+    const emailIsAdmin = ADMIN_EMAILS.includes((user?.email || '').toLowerCase());
+    const role: UserRole = profile?.role ?? (user ? (emailIsAdmin ? 'admin' : 'member') : null);
 
     return (
         <AuthContext.Provider value={{
