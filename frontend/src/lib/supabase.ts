@@ -8,7 +8,13 @@ let _supabase: SupabaseClient | null = null;
 export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
     get(_target, prop) {
         if (!_supabase && supabaseUrl && supabaseAnonKey) {
-            _supabase = createClient(supabaseUrl, supabaseAnonKey);
+            _supabase = createClient(supabaseUrl, supabaseAnonKey, {
+                global: {
+                    fetch: (url, options) => {
+                        return fetch(url, { ...options, cache: 'no-store' });
+                    }
+                }
+            });
         }
         if (!_supabase) {
             // During build/SSR without env vars, return no-op
