@@ -289,14 +289,15 @@ export default function TreeViewPage() {
             // Load from Supabase
             try {
                 const data = await fetchTreeData();
-                if (data.people.length > 0) {
-                    setTreeData(data);
-                    setLoading(false);
-                    return;
-                }
-            } catch { /* fallback to mock */ }
-            // Fallback: use bundled mock data (demo mode)
-            setTreeData(getMockTreeData());
+                // Always use Supabase data (even if empty — user wants to start fresh)
+                setTreeData(data);
+                setLoading(false);
+                return;
+            } catch (err) {
+                console.error('Failed to fetch from Supabase:', err);
+            }
+            // Fallback: empty tree (no mock data)
+            setTreeData({ people: [], families: [] });
             setLoading(false);
         };
         fetchTree();
