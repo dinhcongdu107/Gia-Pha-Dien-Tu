@@ -1,3 +1,4 @@
+import { createBrowserClient } from '@supabase/ssr';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -8,13 +9,19 @@ let _supabase: SupabaseClient | null = null;
 export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
     get(_target, prop) {
         if (!_supabase && supabaseUrl && supabaseAnonKey) {
-            _supabase = createClient(supabaseUrl, supabaseAnonKey, {
-                global: {
-                    fetch: (url, options) => {
-                        return fetch(url, { ...options, cache: 'no-store' });
+            if (typeof window !== 'undefined') {
+                _supabase = createBrowserClient(supabaseUrl, supabaseAnonKey, {
+                    global: {
+                        fetch: (url, options) => fetch(url, { ...options, cache: 'no-store' })
                     }
-                }
-            });
+                });
+            } else {
+                _supabase = createClient(supabaseUrl, supabaseAnonKey, {
+                    global: {
+                        fetch: (url, options) => fetch(url, { ...options, cache: 'no-store' })
+                    }
+                });
+            }
         }
         if (!_supabase) {
             // During build/SSR without env vars, return no-op
