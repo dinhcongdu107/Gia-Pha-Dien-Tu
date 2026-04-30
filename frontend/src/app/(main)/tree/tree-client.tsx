@@ -218,11 +218,12 @@ export default function TreeViewPage() {
         const handle = `P_${Date.now()}`;
         
         if (addMemberConfig.mode === 'root') {
-            await supaAddPerson({
+            const { error } = await supaAddPerson({
                 ...data,
                 handle,
                 generation: 0,
             });
+            if (error) throw new Error(error);
         } else if (addMemberConfig.mode === 'spouse') {
             const partnerHandle = addMemberConfig.parentHandle!;
             const partner = treeData?.people.find(p => p.handle === partnerHandle);
@@ -232,24 +233,27 @@ export default function TreeViewPage() {
             const motherHandle = partner?.gender === 1 ? handle : partnerHandle;
 
             // 1. Create the new person with the family link
-            await supaAddPerson({
+            const { error: err1 } = await supaAddPerson({
                 ...data,
                 handle,
                 generation: partner?.generation ?? 0,
                 families: [famHandle]
             });
+            if (err1) throw new Error(err1);
             
             // 2. Create the family
-            await supaAddFamily({
+            const { error: err2 } = await supaAddFamily({
                 handle: famHandle,
                 fatherHandle: fatherHandle || undefined,
                 motherHandle: motherHandle || undefined,
                 children: []
             });
+            if (err2) throw new Error(err2);
             
             // 3. Update partner to point to this family
             const newFamilies = [...(partner?.families || []), famHandle];
-            await supaUpdatePerson(partnerHandle, { families: newFamilies } as any);
+            const { error: err3 } = await supaUpdatePerson(partnerHandle, { families: newFamilies } as any);
+            if (err3) throw new Error(err3);
 
         } else if (addMemberConfig.mode === 'child') {
             const parentHandle = addMemberConfig.parentHandle!;
@@ -260,25 +264,28 @@ export default function TreeViewPage() {
             const famHandle = fam ? fam.handle : `F_${Date.now()}`;
 
             // 1. Create the child with the parent family link
-            await supaAddPerson({
+            const { error: err1 } = await supaAddPerson({
                 ...data,
                 handle,
                 generation: (parent?.generation ?? 0) + 1,
                 parentFamilies: [famHandle]
             });
+            if (err1) throw new Error(err1);
             
             if (!fam) {
                 // 2. Create new family if none existed
-                await supaAddFamily({
+                const { error: err2 } = await supaAddFamily({
                     handle: famHandle,
                     fatherHandle: parent?.gender === 1 ? parentHandle : undefined,
                     motherHandle: parent?.gender === 0 ? parentHandle : undefined,
                     children: [handle]
                 });
+                if (err2) throw new Error(err2);
                 
                 // 3. Update parent's families
                 const newFamilies = [...(parent?.families || []), famHandle];
-                await supaUpdatePerson(parentHandle, { families: newFamilies } as any);
+                const { error: err3 } = await supaUpdatePerson(parentHandle, { families: newFamilies } as any);
+                if (err3) throw new Error(err3);
             } else {
                 // 2. Add child to existing family
                 const newChildren = [...fam.children, handle];
