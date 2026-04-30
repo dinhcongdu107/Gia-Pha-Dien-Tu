@@ -4,19 +4,22 @@ import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { ContributeDialog } from '@/components/contribute-dialog';
-import { Search, ZoomIn, ZoomOut, Maximize2, TreePine, Eye, Users, GitBranch, User, ArrowDownToLine, ArrowUpFromLine, Crosshair, X, ChevronDown, ChevronRight, BarChart3, Package, Link, ChevronsDownUp, ChevronsUpDown, Copy, Pencil, Save, RotateCcw, Trash2, ArrowUp, ArrowDown, GripVertical, MessageSquarePlus } from 'lucide-react';
+import { Search, ZoomIn, ZoomOut, Maximize2, TreePine, Eye, Users, GitBranch, User, ArrowDownToLine, ArrowUpFromLine, Crosshair, X, ChevronDown, ChevronRight, BarChart3, Package, Link, ChevronsDownUp, ChevronsUpDown, Copy, Pencil, Save, RotateCcw, Trash2, ArrowUp, ArrowDown, GripVertical, MessageSquarePlus, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 
 import {
     fetchTreeData,
+    addPerson as supaAddPerson,
+    addFamily as supaAddFamily,
     updateFamilyChildren as supaUpdateFamilyChildren,
     moveChildToFamily as supaMoveChild,
     removeChildFromFamily as supaRemoveChild,
     updatePersonLiving as supaUpdatePersonLiving,
     updatePerson as supaUpdatePerson,
 } from '@/lib/supabase-data';
+import { AddMemberDialog, type AddMemberData } from '@/components/add-member-dialog';
 import {
     computeLayout, filterAncestors, filterDescendants,
     CARD_W, CARD_H,
@@ -191,6 +194,101 @@ export default function TreeViewPage() {
     const [editorMode, setEditorMode] = useState(false);
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
     const { isAdmin } = useAuth();
+
+    // Add member dialog state
+    const [addMemberConfig, setAddMemberConfig] = useState<{
+        isOpen: boolean;
+        title: string;
+        subtitle?: string;
+        mode: 'root' | 'spouse' | 'child';
+        parentHandle?: string;
+        defaultGender?: number;
+    }>({ isOpen: false, title: '', mode: 'root' });
+
+    const refreshData = useCallback(async () => {
+        try {
+            const data = await fetchTreeData();
+            setTreeData(data);
+        } catch (err) {
+            console.error('Failed to refresh tree data:', err);
+        }
+    }, []);
+
+    const onAddMemberSubmit = async (data: AddMemberData) => {
+        const handle = `P_${Date.now()}`;
+        
+        if (addMemberConfig.mode === 'root') {
+            await supaAddPerson({
+                ...data,
+                handle,
+                generation: 0,
+            });
+        } else if (addMemberConfig.mode === 'spouse') {
+            const partnerHandle = addMemberConfig.parentHandle!;
+            const partner = treeData?.people.find(p => p.handle === partnerHandle);
+            
+            const famHandle = `F_${Date.now()}`;
+            const fatherHandle = partner?.gender === 1 ? partnerHandle : handle;
+            const motherHandle = partner?.gender === 1 ? handle : partnerHandle;
+
+            // 1. Create the new person with the family link
+            await supaAddPerson({
+                ...data,
+                handle,
+                generation: partner?.generation ?? 0,
+                families: [famHandle]
+            });
+            
+            // 2. Create the family
+            await supaAddFamily({
+                handle: famHandle,
+                fatherHandle: fatherHandle || undefined,
+                motherHandle: motherHandle || undefined,
+                children: []
+            });
+            
+            // 3. Update partner to point to this family
+            const newFamilies = [...(partner?.families || []), famHandle];
+            await supaUpdatePerson(partnerHandle, { families: newFamilies } as any);
+
+        } else if (addMemberConfig.mode === 'child') {
+            const parentHandle = addMemberConfig.parentHandle!;
+            const parent = treeData?.people.find(p => p.handle === parentHandle);
+            
+            // Find existing family where parent is father or mother
+            let fam = treeData?.families.find(f => f.fatherHandle === parentHandle || f.motherHandle === parentHandle);
+            const famHandle = fam ? fam.handle : `F_${Date.now()}`;
+
+            // 1. Create the child with the parent family link
+            await supaAddPerson({
+                ...data,
+                handle,
+                generation: (parent?.generation ?? 0) + 1,
+                parentFamilies: [famHandle]
+            });
+            
+            if (!fam) {
+                // 2. Create new family if none existed
+                await supaAddFamily({
+                    handle: famHandle,
+                    fatherHandle: parent?.gender === 1 ? parentHandle : undefined,
+                    motherHandle: parent?.gender === 0 ? parentHandle : undefined,
+                    children: [handle]
+                });
+                
+                // 3. Update parent's families
+                const newFamilies = [...(parent?.families || []), famHandle];
+                await supaUpdatePerson(parentHandle, { families: newFamilies } as any);
+            } else {
+                // 2. Add child to existing family
+                const newChildren = [...fam.children, handle];
+                await supaUpdateFamilyChildren(fam.handle, newChildren);
+            }
+        }
+        
+        await refreshData();
+        setAddMemberConfig(prev => ({ ...prev, isOpen: false }));
+    };
 
     // URL query param initialization + auto-collapse on initial load
     const urlInitialized = useRef(false);
@@ -1041,9 +1139,62 @@ export default function TreeViewPage() {
                             setTreeData(data);
                         }}
                         onClose={() => { setEditorMode(false); setSelectedCard(null); }}
+                        onAddChild={(handle) => setAddMemberConfig({
+                            isOpen: true,
+                            mode: 'child',
+                            title: 'Thêm con',
+                            parentHandle: handle
+                        })}
+                        onAddSpouse={(handle) => setAddMemberConfig({
+                            isOpen: true,
+                            mode: 'spouse',
+                            title: 'Thêm vợ/chồng',
+                            parentHandle: handle
+                        })}
                     />
                 )}
             </div>
+
+            {/* Empty State / Add Root Button */}
+            {isAdmin && treeData && treeData.people.length === 0 && (
+                <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm z-40">
+                    <Card className="w-full max-w-md mx-4 shadow-xl border-blue-100">
+                        <CardContent className="p-8 text-center space-y-6">
+                            <div className="mx-auto w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center">
+                                <TreePine className="w-8 h-8 text-blue-600" />
+                            </div>
+                            <div className="space-y-2">
+                                <h2 className="text-2xl font-bold text-slate-900">Khởi tạo Gia phả</h2>
+                                <p className="text-muted-foreground">
+                                    Chào mừng bạn đến với hệ thống quản lý gia phả dòng họ ĐINH. Hiện tại chưa có dữ liệu, hãy bắt đầu bằng cách thêm Thủy tổ.
+                                </p>
+                            </div>
+                            <Button
+                                size="lg"
+                                className="w-full bg-blue-600 hover:bg-blue-700"
+                                onClick={() => setAddMemberConfig({
+                                    isOpen: true,
+                                    mode: 'root',
+                                    title: 'Thêm Thủy tổ',
+                                    subtitle: 'Người khởi đầu của dòng họ'
+                                })}
+                            >
+                                <UserPlus className="mr-2 h-5 w-5" /> Thêm Thủy tổ
+                            </Button>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* Add Member Dialog */}
+            <AddMemberDialog
+                isOpen={addMemberConfig.isOpen}
+                onClose={() => setAddMemberConfig(prev => ({ ...prev, isOpen: false }))}
+                onSubmit={onAddMemberSubmit}
+                title={addMemberConfig.title}
+                subtitle={addMemberConfig.subtitle}
+                defaultGender={addMemberConfig.defaultGender}
+            />
 
             {/* Legend */}
             <div className="flex gap-3 text-[10px] text-muted-foreground pt-1.5 px-1 flex-wrap">
@@ -1503,7 +1654,19 @@ function StatsOverlay({ stats, onClose }: { stats: TreeStats; onClose: () => voi
 }
 
 // === Editor Panel Component ===
-function EditorPanel({ selectedCard, treeData, onReorderChildren, onMoveChild, onRemoveChild, onToggleLiving, onUpdatePerson, onReset, onClose }: {
+function EditorPanel({
+    selectedCard,
+    treeData,
+    onReorderChildren,
+    onMoveChild,
+    onRemoveChild,
+    onToggleLiving,
+    onUpdatePerson,
+    onReset,
+    onClose,
+    onAddChild,
+    onAddSpouse,
+}: {
     selectedCard: string | null;
     treeData: { people: TreeNode[]; families: TreeFamily[] } | null;
     onReorderChildren: (familyHandle: string, newOrder: string[]) => void;
@@ -1513,6 +1676,8 @@ function EditorPanel({ selectedCard, treeData, onReorderChildren, onMoveChild, o
     onUpdatePerson: (handle: string, fields: Record<string, unknown>) => void;
     onReset: () => void;
     onClose: () => void;
+    onAddChild: (handle: string) => void;
+    onAddSpouse: (handle: string) => void;
 }) {
     const [editName, setEditName] = useState('');
     const [editBirthYear, setEditBirthYear] = useState('');
@@ -1684,6 +1849,31 @@ function EditorPanel({ selectedCard, treeData, onReorderChildren, onMoveChild, o
                                 <Save className="h-3.5 w-3.5" />{saving ? 'Đang lưu...' : 'Lưu thay đổi → Supabase'}
                             </button>
                         )}
+                    </div>
+
+                    {/* Thao tác nhanh */}
+                    <div className="p-3 border-b space-y-2">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                            Thao tác nhanh
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-[11px] flex items-center justify-center gap-1 border-blue-200 text-blue-700 hover:bg-blue-50"
+                                onClick={() => onAddSpouse(person.handle)}
+                            >
+                                <Users className="h-3 w-3" /> Thêm Vợ/Chồng
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-[11px] flex items-center justify-center gap-1 border-green-200 text-green-700 hover:bg-green-50"
+                                onClick={() => onAddChild(person.handle)}
+                            >
+                                <UserPlus className="h-3 w-3" /> Thêm Con
+                            </Button>
+                        </div>
                     </div>
 
                     {/* Children reorder */}

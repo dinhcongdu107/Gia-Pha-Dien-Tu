@@ -189,6 +189,8 @@ export async function updatePerson(
         occupation?: string | null;
         education?: string | null;
         notes?: string | null;
+        families?: string[];
+        parentFamilies?: string[];
     }
 ): Promise<void> {
     // Convert camelCase → snake_case for DB
@@ -204,6 +206,8 @@ export async function updatePerson(
     if (fields.occupation !== undefined) dbFields.occupation = fields.occupation;
     if (fields.education !== undefined) dbFields.education = fields.education;
     if (fields.notes !== undefined) dbFields.notes = fields.notes;
+    if (fields.families !== undefined) dbFields.families = fields.families;
+    if (fields.parentFamilies !== undefined) dbFields.parent_families = fields.parentFamilies;
     dbFields.updated_at = new Date().toISOString();
 
     const { error } = await supabase
